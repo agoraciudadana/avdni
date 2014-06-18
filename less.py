@@ -102,6 +102,9 @@ def get_lines(img, target_area, cutoff):
     intercept_avg = 0
 
     # remove line outliers based on intercept
+    # this is broken, see dni3_rotated
+
+    '''
     lines_filtered = list()
     if lines is not None:
       for rho,theta in lines[0]:
@@ -123,10 +126,11 @@ def get_lines(img, target_area, cutoff):
         # FIXME scale dependent deviation threshold
         if deviation < 200:
           lines_filtered.append((rho,theta))
-
+    '''
     # find contours that are intersected by lines
     contours_found = list()
     if lines is not None:
+      lines_filtered = lines[0]
       print("lines %s " % len(lines_filtered))
       if len(lines_filtered) >= 3:
 
