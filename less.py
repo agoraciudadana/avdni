@@ -63,6 +63,9 @@ def rotate_image(image, center, angle):
   return result
 
 def get_lines(img, target_area, cutoff):
+  # controls how strict line generation is (distance to point)
+  # Distance resolution of the accumulator in pixels.
+  HOUGH_LINE_TOLERANCE = 9
 
   ret, threshed = cv2.threshold(img,cutoff,255,cv2.THRESH_BINARY)
   contours, hierarchy = cv2.findContours(threshed, cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
@@ -98,9 +101,10 @@ def get_lines(img, target_area, cutoff):
   # gradually reduce votes constraint until lines are found
   votes = 30
   while votes > 14:
-    lines = cv2.HoughLines(blank,8,np.pi/180,votes)
+    lines = cv2.HoughLines(blank,HOUGH_LINE_TOLERANCE,np.pi/180,votes)
     intercept_avg = 0
 
+    # TODO
     # remove line outliers based on intercept
     # this is broken, see dni3_rotated
 
@@ -185,6 +189,11 @@ def get_lines(img, target_area, cutoff):
 def get_angle_contours(img_name):
   RADIANS_MAX_DIFF = 0.2
   SHAPE_MAX_DIFF = 0.1
+  START_CUTOFF = 190
+  STOP_CUTOFF = 70
+  MIN_CONTOUR_SIZE = 20
+  # if we find too many contours it's probably noise
+  MAX_NUM_CONTOURS = 500
 
   img = cv2.imread(img_name, cv2.CV_LOAD_IMAGE_GRAYSCALE)
   img = cv2.GaussianBlur(img,(3,3),0)
@@ -192,24 +201,24 @@ def get_angle_contours(img_name):
   height, width = img.shape
   blank = blank_image(height, width)
 
-  cutoff = 190
+  cutoff = START_CUTOFF
 
   global_max_len = 0
   global_contour_indices = None
   global_contours = None
   # gradually decrease pixels that pass through
-  while cutoff > 70:
+  while cutoff > STOP_CUTOFF:
     ret, threshed = cv2.threshold(img,cutoff,255,cv2.THRESH_BINARY)
     contours, hierarchy = cv2.findContours(threshed, cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
 
     contours2 = list()
     for i1, cnt1 in enumerate(contours):
       # filter contours that are too short
-      if len(cnt1) > 20:
+      if len(cnt1) > MIN_CONTOUR_SIZE:
         contours2.append(cnt1)
 
     print("cutoff %s, %s size filtered contours" % (cutoff, len(contours2)))
-    if len(contours2) > 500:
+    if len(contours2) > MAX_NUM_CONTOURS:
       cutoff -= 10
       continue
 
@@ -232,18 +241,22 @@ def get_angle_contours(img_name):
           if i1 == i2:
               continue
           x,y,w2,h2 = cv2.boundingRect(cnt2)
+          # FIXME scale dependent constants
+          # matching shapes should also have similar dimensions
           if math.fabs(w2 - w) < 5 and math.fabs(h2 - h) < 5:
             dist = cv2.matchShapes(cnt1, cnt2, 3, 0)
             if dist < threshold:
               matches[i1].append(i2)
 
-      # find convexity defects in matches
+      # find the largest cluster of similar contours
       max_len = 0
       max_len_key = None
       max_area = 0
       best_angle = 0
       for key in matches.keys():
+        # new best cluster found?
         if len(matches[key]) > max_len:
+          # good clusters of <" also have the same convexity defect
           hull = cv2.convexHull(contours2[key], returnPoints = False)
           defects = cv2.convexityDefects(contours2[key], hull)
           defect = largest_defect(defects)
@@ -259,7 +272,7 @@ def get_angle_contours(img_name):
           # print(angle)
           # cv2.line(blank,(start[0], start[1]),(end[0], end[1]),255,1)
 
-          # indicate all contours are ok
+          # indicate all contours are ok in their c. defects
           ok = True
 
           # ensure that all target contours have similar defect gradient as source
@@ -290,10 +303,10 @@ def get_angle_contours(img_name):
               break
 
           average_angle = average_angle / (len(matches[key]) + 1)
-          # print(average_angle)
+
           if ok:
             # correction for "A"'s and "V"'s in the other parts of the image (that are smaller) =>
-            # if we have already found more  than 10 matches, we favour contours that are larger
+            # prefer larger contours once the size of the cluster is over 10
             if area > max_area or max_len < 10:
               max_len = len(matches[key])
               max_len_key = key
@@ -321,7 +334,7 @@ def get_angle_contours(img_name):
       degrees = (180 * global_angle) / math.pi
 
       print("new global, cutoff = %s, max_len = %s, defect angle = %s" % (global_cutoff, global_max_len, degrees))
-      # reduce increment to increase sensitivity if there are changes
+      # reduce increment to increase sensitivity if there are changes (aka adaptive timestep)
       cutoff += 15
     elif max_max_len == global_max_len:
       # we want the least amount of pixels that give us the best match
@@ -371,7 +384,7 @@ print("area = %s, cutoff = %s, defect angle = %s" % (average_area, global_cutoff
 # now we try to find the OCR text area using cutoff, and ">" size info
 img_lines = cv2.imread(sys.argv[1], cv2.CV_LOAD_IMAGE_GRAYSCALE)
 img_lines = cv2.GaussianBlur(img_lines,(3,3),0)
-# grab contours matching lines
+# grab contours matching lines generated from contours with given area and cutoff values
 contours_found, lines, blank = get_lines(img_lines, average_area, global_cutoff)
 
 # DEBUG draw line matching contours
@@ -383,7 +396,7 @@ for i1, cnt1 in enumerate(contours_found):
     x,y,w,h = cv2.boundingRect(cnt1)
     cv2.circle(img_lines, (cx1, cy1), 10, 40, 2)
 
-
+# DEBUG draw the lines
 if lines is not None:
   for rho,theta in lines[0]:
     a = np.cos(theta)
@@ -401,8 +414,8 @@ if lines is not None:
     print("intercept %s degrees %s radians %s" % (intercept, degrees, theta))
     cv2.line(img_lines,(x1,y1),(x2,y2),0,2)
 
-
 # get rotated bounding rectangle for found points
+# first collect the points
 points = np.zeros((1,len(contours_found),2), np.int32)
 for i, cnt in enumerate(contours_found):
   M1 = cv2.moments(cnt)
@@ -412,21 +425,26 @@ for i, cnt in enumerate(contours_found):
 
     points[0][i] = [cx1, cy1]
 
+# now get the bounding rotated rect
 box2d = cv2.minAreaRect(points)
 print("center %s %s" % (box2d[0][0], box2d[0][1]))
 print("width %s %s" % (box2d[1][0], box2d[1][1]))
 print("angle %s" % box2d[2])
 center = (box2d[0][0], box2d[0][1])
-# enlarge box
+# enlarge box since we are using centroids
 width = (box2d[1][0] + (1.6 * math.sqrt(average_area)), box2d[1][1] + (1.6 * math.sqrt(average_area)))
+# the the box angle (see box2d)
 angle = box2d[2]
 
-# HACK does not work
+# HACK this does not work well, sometimes upside down
+# trying to compensate for more than 90 degree rotation
 if intercept < 0:
   add_angle = 180
 else:
   add_angle = 0
 
+# capture and de-rotate the image section corresponding to the bounding rect
+# we use this if as depending on the orientation the angle has different meaning
 if width[1] > width[0]:
   sub = subimage(threshed2, center, ((90 + add_angle + angle) * math.pi) / 180, int(width[1]), int(width[0]))
 else:
@@ -448,13 +466,14 @@ cv2.fillPoly(mask, roi_corners, white)
 # apply the mask
 masked_image = cv2.bitwise_or(threshed2, mask)
 '''
+# the region of interest is output
 cv2.imwrite('target.png', sub)
 
-# show images
+# show images for debugging
 cv2.imshow('dni', img)
 cv2.imshow('img_lines', img_lines)
 cv2.imshow('centroids', blank)
 cv2.imshow('target', sub)
 
+# wait to exit
 cv2.waitKey(0)
-
