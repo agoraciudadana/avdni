@@ -9,6 +9,24 @@ from matplotlib import pyplot as plt
 from scipy.spatial.distance import *
 from scipy.cluster.hierarchy import *
 
+def resize_image(image):
+  TARGET_SIZE = 1200
+
+  height, width = image.shape
+
+  if(height > width):
+    largest = height
+  else:
+    largest = width
+
+  if(largest > TARGET_SIZE):
+    print("resize_image: dimensions %s x %s" % (height, width))
+    factor = TARGET_SIZE / largest
+    print("resizing with factor %s " % factor)
+    image = cv2.resize(image, (0, 0), fx=factor, fy=factor)
+
+  return image
+
 def subimage(image, center, theta, width, height):
    output_image = cv.CreateImage((width, height), 8, 1)
    mapping = np.array([[np.cos(theta), -np.sin(theta), center[0]],
@@ -43,14 +61,10 @@ def line_angle(start, end):
   deltax = end[0] - start[0]
   deltay = end[1] - start[1]
 
-  # print(end, start)
-
   if deltax == 0:
     gradient = sys.float_info.max
   else:
     gradient = deltay / deltax
-
-  # print(deltay, deltax, gradient)
 
   return math.atan(gradient)
 
@@ -64,8 +78,8 @@ def rotate_image(image, center, angle):
 
 def get_lines(img, target_area, cutoff):
   # controls how strict line generation is (distance to point)
-  # Distance resolution of the accumulator in pixels.
-  HOUGH_LINE_TOLERANCE = 9
+  # distance resolution of the accumulator in pixels
+  LINE_TOLERANCE_FACTOR = 9
 
   ret, threshed = cv2.threshold(img,cutoff,255,cv2.THRESH_BINARY)
   contours, hierarchy = cv2.findContours(threshed, cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
@@ -101,7 +115,7 @@ def get_lines(img, target_area, cutoff):
   # gradually reduce votes constraint until lines are found
   votes = 30
   while votes > 14:
-    lines = cv2.HoughLines(blank,HOUGH_LINE_TOLERANCE,np.pi/180,votes)
+    lines = cv2.HoughLines(blank,LINE_TOLERANCE_FACTOR,np.pi/180,votes)
     intercept_avg = 0
 
     # TODO
@@ -195,10 +209,12 @@ def get_angle_contours(img_name):
   # if we find too many contours it's probably noise
   MAX_NUM_CONTOURS = 500
 
-  img = cv2.imread(img_name, cv2.CV_LOAD_IMAGE_GRAYSCALE)
+  img = resize_image(cv2.imread(img_name, cv2.CV_LOAD_IMAGE_GRAYSCALE))
   img = cv2.GaussianBlur(img,(3,3),0)
 
   height, width = img.shape
+  print("Image dimensions %s x %s" % (height, width))
+
   blank = blank_image(height, width)
 
   cutoff = START_CUTOFF
@@ -222,7 +238,6 @@ def get_angle_contours(img_name):
       cutoff -= 10
       continue
 
-
     # find contours that have similar shapes
     matches = dict()
     threshold = 0.01
@@ -244,6 +259,7 @@ def get_angle_contours(img_name):
           # FIXME scale dependent constants
           # matching shapes should also have similar dimensions
           if math.fabs(w2 - w) < 5 and math.fabs(h2 - h) < 5:
+            # 3 = CV_CONTOURS_MATCH_I3, fourth param must be passed but is unused
             dist = cv2.matchShapes(cnt1, cnt2, 3, 0)
             if dist < threshold:
               matches[i1].append(i2)
@@ -256,7 +272,7 @@ def get_angle_contours(img_name):
       for key in matches.keys():
         # new best cluster found?
         if len(matches[key]) > max_len:
-          # good clusters of <" also have the same convexity defect
+          # good clusters of "<" also have the same convexity defect
           hull = cv2.convexHull(contours2[key], returnPoints = False)
           defects = cv2.convexityDefects(contours2[key], hull)
           defect = largest_defect(defects)
@@ -358,19 +374,19 @@ for i1, cnt1 in enumerate(contours2):
   # uncomment to show all contours
   # cv2.rectangle(img,(x,y),(x+w,y+h),0,1)
 
-# now we have contours matching ">"
+# now we have contours matching "<"
 print("%s detected contours " % len(global_contour_indices))
 print(global_contour_indices)
 
 ret, threshed2 = cv2.threshold(img,global_cutoff,255,cv2.THRESH_BINARY)
 print("degrees %s" % ((global_angle * 180) / math.pi))
 
-# calculate average area of ">"
+# calculate average area of "<"
 average_area = 0
 for index in global_contour_indices:
   x,y,w,h = cv2.boundingRect(global_contours[index])
   average_area += h*w
-  # draw > contours
+  # draw < contours
   # cv2.rectangle(img,(x,y),(x+w,y+h),0,1)
 
 average_area = average_area / len(global_contour_indices)
@@ -382,7 +398,7 @@ print("area = %s, cutoff = %s, defect angle = %s" % (average_area, global_cutoff
 #
 
 # now we try to find the OCR text area using cutoff, and ">" size info
-img_lines = cv2.imread(sys.argv[1], cv2.CV_LOAD_IMAGE_GRAYSCALE)
+img_lines = resize_image(cv2.imread(sys.argv[1], cv2.CV_LOAD_IMAGE_GRAYSCALE))
 img_lines = cv2.GaussianBlur(img_lines,(3,3),0)
 # grab contours matching lines generated from contours with given area and cutoff values
 contours_found, lines, blank = get_lines(img_lines, average_area, global_cutoff)
