@@ -10,7 +10,7 @@ from scipy.spatial.distance import *
 from scipy.cluster.hierarchy import *
 
 def resize_image(image):
-  TARGET_SIZE = 1200
+  TARGET_SIZE = 1400
 
   height, width = image.shape
 
